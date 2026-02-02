@@ -2746,3 +2746,64 @@ Output = Input *(1 - Factor) + (1 - Input) * Factor
 
 你现在正在学习 Nino 的课程，这个节点在做风格化渲染（Stylized Rendering）时非常有用，因为风格化往往需要对颜色的饱和度和色相进行微调，以达到特定的艺术效果。
 
+# Normal  Map
+
+![image-20260202204801984](./assets/image-20260202204801984.png) ![image-20260202204822687](./assets/image-20260202204822687.png)
+
+这是一个 Blender 中的 **Normal Map (法线贴图)** 节点。
+
+基于你提供的截图（其中包含“Blender Object Space”和“Blender World Space”选项）以及提到的 **Blender 5.0** 上下文，这个节点反映了 Blender 在渲染管线和资产互操作性（Interoperability）方面的最新演进。
+
+以下是关于该节点的详细技术解释：
+
+### 1. 核心功能
+
+**Normal Map 节点**的主要作用是将 RGB 颜色数据（通常来自纹理贴图）转换为法线向量（Vector），从而让材质表面在不增加多边形面数的情况下，表现出凹凸、褶皱或细节。
+
+它是连接“图片纹理”与着色器（如 Principled BSDF）中“Normal（法线）”插口的桥梁。
+
+------
+
+### 2. 空间（Space）下拉菜单详解 (重点)
+
+截图中最引人注目的变化是下拉菜单中的选项。在 Blender 4.x 及迈向 5.0 的开发路线中，为了更好地支持 **USD (Universal Scene Description)** 和 **MaterialX** 流程，坐标空间的定义变得更加明确。
+
+- **Tangent Space (切线空间):**
+  - **默认且最常用。**
+  - 法线是相对于多边形表面的方向定义的。
+  - **特点：** 贴图通常呈蓝紫色。如果模型变形（如角色动画），法线细节会跟随表面正确移动。
+  - **用途：** 绝大多数角色、有机物体、游戏资产。
+- **Object Space (对象空间):**
+  - 法线是相对于物体自身的中心和旋转定义的。
+  - **特点：** 贴图呈现五颜六色（彩虹色）。计算速度稍快，但不支持网格变形（Deformation）。
+  - **用途：** 静态物体、硬表面模型。
+- **World Space (世界空间):**
+  - 法线是相对于整个 3D 场景的世界坐标定义的。
+  - **用途：** 极少用于纹理，通常用于特殊的环境计算或烘焙。
+- **Blender Object Space / Blender World Space (新出现的选项):**
+  - **Blender 5.0 / 下一代管线特性：** 这些选项的出现通常是为了解决 **坐标系转换（Coordinate System Handoff）** 的问题。
+  - **背景：** 标准的图形学“Object Space”有时在不同的软件（如 Maya, Unreal, Unity）之间定义不同（例如 Y轴向上 vs Z轴向上，左手系 vs 右手系）。
+  - **含义：** 这里的 "Blender Object Space" 显式指代 **Blender 原生的 Z-轴向上、右手坐标系**。
+  - **为何需要：** 当你在 Blender 5.0 中使用 MaterialX 或 Hydra 渲染代理，或者进行 USD 导出时，选择这些选项可以强制使用 Blender 的内部坐标逻辑，防止在其他渲染器中出现法线反转或光照方向错误的问题。
+
+------
+
+### 3. 输入与输出参数
+
+- **Strength (强度):**
+  - 控制凹凸感的深浅。数值越大，表面看起来越粗糙/深邃。通常保持在 1.0，根据视觉需求微调。
+- **Color (颜色):**
+  - 这里连接你的法线贴图纹理（Image Texture）。
+  - **重要提示：** 连接到此端口的 Image Texture 节点，其色彩空间（Color Space）**必须**设置为 **Non-Color**，否则光照计算会出错（看起来会很怪异）。
+- **Normal (输出):**
+  - 输出计算后的矢量数据，连接到 Shader 的 Normal 插口。
+
+### 4. Blender 5.0 展望与建议
+
+在 Blender 4.x 晚期到 5.0 的路线图中，Blender 正在大力整合 **Vulkan** 后端和 **MaterialX** 标准。你看到的这个节点菜单变化，很可能是为了让 Blender 的材质节点能直接兼容行业标准的材质交换格式。
+
+**给你的建议：**
+
+1. **常规使用：** 如果你只是在 Blender 内部做静态渲染或动画，保持默认的 **Tangent Space** 即可。
+2. **跨软件工作流：** 如果你在测试 Blender 5.0 的 USD 流程或向游戏引擎（UE5/Unity）导出资产，且发现法线方向不对，请尝试切换标准 Space 和 "Blender" 变体，以匹配目标软件的坐标轴。
+3. **色彩空间检查：** 永远记得检查你的贴图节点是否设为了 Non-Color Data。
