@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>全能焦散模拟器 (Universal Caustics)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #050505; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+        
+        /* UI 界面 */
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid #444; border-radius: 12px;
+            padding: 20px; width: 340px;
+            color: #eee;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        h2 { margin: 0 0 15px 0; font-size: 18px; color: #4db8ff; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 15px; }
+        button {
+            padding: 10px; border: none; border-radius: 6px;
+            background: #333; color: #aaa; cursor: pointer;
+            font-size: 13px; transition: all 0.2s;
+        }
+        button:hover { background: #444; color: #fff; }
+        button.active { background: #4db8ff; color: #000; font-weight: bold; box-shadow: 0 0 15px rgba(77, 184, 255, 0.3); }
+
+        .desc { font-size: 13px; line-height: 1.5; color: #ccc; min-height: 80px; }
+        .highlight { color: #ffeb3b; font-weight: bold; }
+        .instruction { margin-top: 10px; font-size: 12px; color: #888; font-style: italic; border-top: 1px solid #333; padding-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <h2>焦散实验室</h2>
+    <div class="grid">
+        <button onclick="setMode(0)" class="active" id="btn0">1. 反射 (咖啡杯)</button>
+        <button onclick="setMode(1)" id="btn1">2. 折射 (透镜)</button>
+        <button onclick="setMode(2)" id="btn2">3. 色散 (棱镜)</button>
+        <button onclick="setMode(3)" id="btn3">4. 水面 (波纹)</button>
+    </div>
+    <div id="description" class="desc"></div>
+    <div class="instruction">💡 提示：在屏幕上移动鼠标/手指可以控制光源位置。</div>
+</div>
+
+<canvas id="canvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const descEl = document.getElementById('description');
+    
+    let width, height;
+    let mode = 0; // 当前模式
+    let mouseX = window.innerWidth / 2;
+    let mouseY = window.innerHeight / 2;
+    let time = 0;
+
+    // 场景配置数据
+    const scenes = [
+        {
+            title: "反射焦散 (Catacaustics)",
+            desc: "这是光线打在弯曲镜面（如咖啡杯内壁、金属戒指）上反射形成的。<br><br>注意观察那个<span class='highlight'>心形 (Cardioid)</span> 的光斑尖端。这不需要透明物体，只要有反光内壁就会出现。",
+            color: '255, 200, 100' // 金色
+        },
+        {
+            title: "折射焦散 (Diacaustics)",
+            desc: "这是光线穿过凸透镜（如玻璃球、放大镜）汇聚形成的。<br><br>光线被'挤'到了一个焦点上。这就是为什么放大镜能点火——能量密度在这里是无限大的。",
+            color: '100, 200, 255' // 蓝色
+        },
+        {
+            title: "色散焦散 (Dispersion)",
+            desc: "这是钻石和彩虹的原理。不同颜色的光折射率不同（蓝光弯得比红光急）。<br><br>原本白色的焦散被<span class='highlight'>拆解</span>成了光谱，边缘出现了彩虹色。",
+            color: '255, 255, 255' // 白色(但会拆分)
+        },
+        {
+            title: "水面焦散 (Water Ripples)",
+            desc: "这是光线穿过起伏不平的水面造成的。<br><br>每个波峰都像一个小透镜，把光聚到底部。无数个随机移动的聚焦点形成了一张<span class='highlight'>动态的光网</span>。",
+            color: '0, 255, 255' // 青色
+        }
+    ];
+
+    // 初始化
+    function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+    window.addEventListener('resize', resize);
+    window.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+    window.addEventListener('touchmove', e => { mouseX = e.touches[0].clientX; mouseY = e.touches[0].clientY; });
+    resize();
+    updateUI();
+
+    function setMode(m) {
+        mode = m;
+        document.querySelectorAll('button').forEach((b, i) => {
+            b.className = i === m ? 'active' : '';
+        });
+        updateUI();
+    }
+
+    function updateUI() {
+        descEl.innerHTML = scenes[mode].desc;
+    }
+
+    // ================== 核心渲染循环 ==================
+    function loop() {
+        time += 0.01;
+        
+        // 清空画布 (带一点拖尾效果，更有光感)
+        ctx.fillStyle = 'rgba(5, 5, 5, 1)';
+        ctx.fillRect(0, 0, width, height);
+
+        // 通用：启用【变亮】混合模式，这是模拟光的物理叠加的关键
+        ctx.globalCompositeOperation = 'lighter';
+
+        switch(mode) {
+            case 0: drawReflection(); break;
+            case 1: drawRefraction(); break;
+            case 2: drawDispersion(); break;
+            case 3: drawWater(); break;
+        }
+
+        // 恢复默认
+        ctx.globalCompositeOperation = 'source-over';
+        requestAnimationFrame(loop);
+    }
+    loop();
+
+    // ================== 场景 1: 反射 (咖啡杯心形) ==================
+    function drawReflection() {
+        const cx = width/2;
+        const cy = height/2 + 50;
+        const radius = Math.min(width, height) * 0.25;
+
+        // 1. 画出“咖啡杯”边缘（半圆）
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, Math.PI, 0); // 上半圆
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 5;
+        ctx.stroke();
+
+        // 2. 发射平行光 (从左边射入，也可以随鼠标改变角度)
+        const rayCount = 400;
+        const lightAngle = (mouseX - width/2) * 0.002; // 鼠标控制入射角
+        
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(${scenes[0].color}, 0.08)`; // 非常透明的光线
+
+        for (let i = 0; i < rayCount; i++) {
+            // 平行光束宽度
+            let offset = (i / rayCount - 0.5) * radius * 2;
+            
+            // 光线起点 (远处)
+            let sx = cx + offset * Math.cos(lightAngle) - Math.sin(lightAngle) * 800;
+            let sy = cy + offset * Math.sin(lightAngle) + Math.cos(lightAngle) * 800;
+            
+            // 简单的数学模型：光线击中圆内壁
+            // 这里为了演示，我们假设光线是垂直射向圆开口的
+            // 实际计算需要解直线与圆的方程，这里简化演示心形线原理
+            
+            // 我们直接在圆周上取点作为反射点
+            let angle = Math.PI + (i / rayCount) * Math.PI; // 半圆上的点
+            let rx = cx + radius * Math.cos(angle);
+            let ry = cy + radius * Math.sin(angle);
+
+            // 只有当入射光角度合适时才画入射线(简化)
+            // 这里主要画反射线，因为焦散是反射线形成的
+            
+            // 核心：反射定律
+            // 入射光假设是水平向右 (为了形成完美心形)
+            // 真实的入射光是随鼠标的，这里为了视觉效果，让光线打满整个半圆
+            
+            // 计算法线角度
+            let normalAngle = angle;
+            // 假设平行光水平射入 (0度)
+            let incidentAngle = 0; 
+            
+            // 稍微随鼠标偏转一下平行光方向
+            let lightDir = (mouseX - width/2) * 0.005;
+            incidentAngle = lightDir;
+
+            // 反射角 = 2 * 法线角 - 入射角 - PI
+            let reflectAngle = 2 * normalAngle - incidentAngle - Math.PI;
+
+            // 绘制
+            ctx.beginPath();
+            // 入射光 (画短一点意思一下)
+            ctx.moveTo(rx - Math.cos(incidentAngle)*200, ry - Math.sin(incidentAngle)*200);
+            ctx.lineTo(rx, ry);
+            // 反射线 (这才是形成焦散的关键)
+            ctx.lineTo(rx + Math.cos(reflectAngle) * radius * 2.5, ry + Math.sin(reflectAngle) * radius * 2.5);
+            ctx.stroke();
+        }
+    }
+
+    // ================== 场景 2: 折射 (透镜聚焦) ==================
+    function drawRefraction() {
+        const cx = width/2;
+        const cy = height/2;
+        const r = 120;
+        const ior = 1.6; // 玻璃折射率
+
+        // 画玻璃球
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, 0, Math.PI*2);
+        ctx.strokeStyle = '#444'; ctx.lineWidth=2; ctx.stroke();
+        ctx.fillStyle = 'rgba(20, 20, 30, 0.5)'; ctx.fill();
+
+        const rayCount = 300;
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = `rgba(${scenes[1].color}, 0.1)`;
+
+        // 光源位置
+        let lx = mouseX;
+        let ly = mouseY;
+
+        for (let i = 0; i < rayCount; i++) {
+            // 光束发散点 (鼠标位置)
+            let angleSpread = (i / rayCount - 0.5) * 1.5; // 光束发散角
+            let baseAngle = Math.atan2(cy - ly, cx - lx);
+            let angle = baseAngle + angleSpread * 0.5; // 稍微聚拢一点的光束
+
+            // 1. 入射点检测 (Ray-Sphere Intersection)
+            // 简化：假设光线打在球体左侧表面
+            // 为了视觉演示，我们只计算能穿透的那部分光线
+            
+            // 这里用简化的透镜模拟：光线越靠近边缘，偏折越大
+            // 入射向量
+            let dx = Math.cos(angle);
+            let dy = Math.sin(angle);
+            
+            // 假设击中球体中心平面 (简化视觉模型)
+            // 真实 RayTracing 需要解二次方程，这里模拟结果
+            
+            let distToCenter = Math.random() * 20; // 抖动一下消除摩尔纹
+            
+            // 模拟光线穿过透镜
+            // 越靠近中心(axis)，偏折越小；越靠近边缘，偏折越大
+            // 用简单的 y 轴距离模拟
+            let offset = (i - rayCount/2) * (r*1.8 / rayCount); 
+            
+            // 旋转坐标系让光束对准球心
+            let perpX = -Math.sin(baseAngle) * offset;
+            let perpY = Math.cos(baseAngle) * offset;
+            
+            let hitX = cx - Math.cos(baseAngle)*r*0.8 + perpX;
+            let hitY = cy - Math.sin(baseAngle)*r*0.8 + perpY;
+            
+            if (Math.sqrt(perpX*perpX + perpY*perpY) < r) {
+                 // 绘制入射
+                ctx.beginPath();
+                ctx.moveTo(lx, ly);
+                ctx.lineTo(hitX, hitY);
+                
+                // 聚焦计算
+                // 完美的透镜会聚于一点，球透镜会有球差(Spherical Aberration) -> 这就是焦散！
+                // 球差公式模拟：偏折角随着 offset 的平方增加
+                let aberration = (offset / r) * (offset / r) * 2.0; 
+                let focusDist = 200 - aberration * 100; // 边缘的光聚焦得更近
+                
+                let outX = cx + Math.cos(baseAngle) * (r + focusDist) + perpX * 0.1; // 收束
+                let outY = cy + Math.sin(baseAngle) * (r + focusDist) + perpY * 0.1;
+
+                // 延长线
+                let extX = outX + (outX - hitX) * 2;
+                let extY = outY + (outY - hitY) * 2;
+
+                ctx.lineTo(extX, extY);
+                ctx.stroke();
+            }
+        }
+    }
+
+    // ================== 场景 3: 色散 (棱镜) ==================
+    function drawDispersion() {
+        const cx = width/2;
+        const cy = height/2;
+        
+        // 画个棱镜 (三角形)
+        const size = 150;
+        const p1 = {x: cx, y: cy - size};
+        const p2 = {x: cx - size, y: cy + size*0.7};
+        const p3 = {x: cx + size, y: cy + size*0.7};
+
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.lineTo(p3.x, p3.y); ctx.closePath();
+        ctx.strokeStyle = '#666'; ctx.lineWidth=2; ctx.stroke();
+        ctx.fillStyle = 'rgba(20,20,20,0.8)'; ctx.fill();
+
+        // 光束
+        const rayCount = 150;
+        // 红绿蓝三种折射率
+        const iors = [
+            {color: '#ff3333', n: 1.1}, // 红光折射率小
+            {color: '#33ff33', n: 1.2}, // 绿光中等
+            {color: '#3333ff', n: 1.3}  // 蓝光折射率大 (弯得厉害)
+        ];
+
+        let lx = mouseX; // 光源X
+        let ly = mouseY; // 光源Y
+        
+        // 限制光源在左侧以免逻辑太复杂
+        if (lx > cx) lx = cx - 10;
+
+        for (let i = 0; i < rayCount; i++) {
+            let offset = (i / rayCount) * 40; // 光束厚度
+            let startY = ly + offset;
+            
+            // 1. 入射点 (假设打在左边 p1-p2 边上)
+            // 简化几何计算: 找到 y 对应的 x
+            // p1-p2 斜率
+            let k = (p2.y - p1.y) / (p2.x - p1.x);
+            let b = p1.y - k * p1.x;
+            // x = (y - b) / k
+            let hitX = (startY - b) / k;
+            
+            // 只有打在棱镜上的光才算
+            if (hitX > p2.x && hitX < p1.x) {
+                
+                // 绘制白光入射
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+                ctx.lineWidth = 2;
+                ctx.moveTo(lx - 200, startY + (ly-cy)*0.1); // 稍微有点角度
+                ctx.lineTo(hitX, startY);
+                ctx.stroke();
+
+                // 2. 色散 (分裂成三束)
+                iors.forEach(ior => {
+                    ctx.beginPath();
+                    ctx.strokeStyle = ior.color;
+                    ctx.lineWidth = 1;
+                    ctx.globalAlpha = 0.1; // 透明度
+
+                    // 模拟折射路径
+                    // 进棱镜
+                    let refractInternalY = startY + (ior.n * 20) * (startY - cy)/200; 
+                    let exitX = cx + (cx - hitX); // 对称到右边 (简化)
+                    
+                    // 出棱镜 (第二次折射，色散拉大)
+                    let exitY = refractInternalY + (ior.n * 50); 
+                    
+                    // 最终射出
+                    let finalX = width;
+                    let finalY = exitY + (exitY - refractInternalY) * 5;
+
+                    ctx.moveTo(hitX, startY);
+                    ctx.lineTo(exitX, exitY);
+                    ctx.lineTo(finalX, finalY);
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+                });
+            }
+        }
+    }
+
+    // ================== 场景 4: 水面 (动态波纹) ==================
+    function drawWater() {
+        // 水面焦散通常是多层正弦波叠加的结果
+        // 这里用线条模拟波的"聚焦线"
+        
+        const cols = 60;
+        const rows = 40;
+        const cellW = width / cols;
+        const cellH = height / rows;
+
+        ctx.strokeStyle = `rgba(${scenes[3].color}, 0.15)`;
+        ctx.lineWidth = 1.5;
+
+        // 绘制两层网格，以不同速度移动，模拟水波干涉
+        for (let l = 0; l < 2; l++) {
+            let t = time * (l === 0 ? 1 : -0.8) + l*10;
+            
+            for (let r = 0; r < rows; r++) {
+                ctx.beginPath();
+                for (let c = 0; c <= cols; c++) {
+                    let x = c * cellW;
+                    let y = r * cellH;
+                    
+                    // 核心：用正弦波偏移顶点
+                    // 焦散在于：线条变密的地方亮，变疏的地方暗
+                    
+                    let offsetX = Math.sin(c * 0.2 + t) * 30 + Math.cos(r * 0.3 + t) * 20;
+                    let offsetY = Math.cos(c * 0.3 - t) * 30 + Math.sin(r * 0.2 + t) * 20;
+                    
+                    // 让鼠标干扰水波
+                    let dist = Math.sqrt((x-mouseX)**2 + (y-mouseY)**2);
+                    let influence = Math.max(0, 1 - dist/300);
+                    offsetX += (x - mouseX) * influence * 0.5;
+                    offsetY += (y - mouseY) * influence * 0.5;
+
+                    if (c===0) ctx.moveTo(x + offsetX, y + offsetY);
+                    else ctx.lineTo(x + offsetX, y + offsetY);
+                }
+                ctx.stroke();
+            }
+        }
+        
+        // 再画竖向的线，形成网格
+         for (let l = 0; l < 2; l++) {
+            let t = time * (l === 0 ? 1 : -0.8) + l*10;
+             for (let c = 0; c < cols; c++) {
+                ctx.beginPath();
+                for (let r = 0; r <= rows; r++) {
+                    let x = c * cellW;
+                    let y = r * cellH;
+                    let offsetX = Math.sin(c * 0.2 + t) * 30 + Math.cos(r * 0.3 + t) * 20;
+                    let offsetY = Math.cos(c * 0.3 - t) * 30 + Math.sin(r * 0.2 + t) * 20;
+                    
+                     let dist = Math.sqrt((x-mouseX)**2 + (y-mouseY)**2);
+                    let influence = Math.max(0, 1 - dist/300);
+                    offsetX += (x - mouseX) * influence * 0.5;
+                    offsetY += (y - mouseY) * influence * 0.5;
+
+                    if (r===0) ctx.moveTo(x + offsetX, y + offsetY);
+                    else ctx.lineTo(x + offsetX, y + offsetY);
+                }
+                ctx.stroke();
+            }
+         }
+    }
+
+</script>
+</body>
+</html>

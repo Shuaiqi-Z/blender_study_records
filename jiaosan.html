@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>焦散模拟器 (Caustics Simulator)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; }
+        
+        /* UI 界面样式 */
+        #ui-container {
+            position: absolute; top: 20px; left: 20px; z-index: 10;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #444; border-radius: 8px;
+            padding: 20px; width: 320px;
+            backdrop-filter: blur(5px);
+            color: #eee;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        h2 { margin: 0 0 15px 0; font-size: 18px; color: #4db8ff; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px;
+            background: #333; color: #aaa; cursor: pointer;
+            transition: all 0.2s; font-weight: bold;
+        }
+        button.active { background: #4db8ff; color: #000; box-shadow: 0 0 10px rgba(77, 184, 255, 0.5); }
+        button:hover:not(.active) { background: #555; }
+        
+        .description { font-size: 13px; line-height: 1.6; color: #ccc; }
+        .highlight { color: #ffeb3b; font-weight: bold; }
+        .tip { margin-top: 10px; font-size: 12px; color: #888; font-style: italic; }
+
+        /* 隐藏非活动画布 */
+        .hidden { visibility: hidden; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <h2>Blender 焦散原理演示</h2>
+        <div class="btn-group">
+            <button id="btn-scene1" class="active" onclick="switchScene(1)">场景 1: 水面网纹</button>
+            <button id="btn-scene2" onclick="switchScene(2)">场景 2: 透镜聚焦</button>
+        </div>
+        <div id="info-text" class="description">
+            </div>
+    </div>
+
+    <canvas id="canvas-webgl"></canvas>
+
+    <canvas id="canvas-2d" class="hidden"></canvas>
+
+    <script id="vertex-shader" type="x-shader/x-vertex">
+        attribute vec2 a_position;
+        void main() { gl_Position = vec4(a_position, 0.0, 1.0); }
+    </script>
+
+    <script id="fragment-shader" type="x-shader/x-fragment">
+        precision highp float;
+        uniform vec2 u_resolution;
+        uniform float u_time;
+
+        void main() {
+            vec2 st = gl_FragCoord.xy/u_resolution.xy;
+            st.x *= u_resolution.x/u_resolution.y;
+            
+            // 模拟焦散的核心算法：正弦波叠加
+            float time = u_time * 0.5;
+            vec2 p = mod(st * 6.0, 6.0) - 250.0;
+            vec2 i = vec2(p);
+            float c = 1.0;
+            float inten = .005;
+
+            // 循环叠加 5 层波浪，每层方向略有不同
+            for (int n = 0; n < 5; n++) {
+                float t = time * (1.0 - (3.5 / float(n+1)));
+                i = p + vec2(cos(t - i.x) + sin(t + i.y), sin(t - i.y) + cos(t + i.x));
+                c += 1.0/length(vec2(p.x / (sin(i.x+t)/inten),p.y / (cos(i.y+t)/inten)));
+            }
+            c /= float(5);
+            c = 1.17-pow(c, 1.4); // 调整对比度
+            
+            // 颜色混合
+            vec3 waterColor = vec3(0.0, 0.25, 0.4); 
+            vec3 lightColor = vec3(0.3, 0.9, 1.0);
+            vec3 color = waterColor + lightColor * pow(c, 4.0); // 指数级提亮，模拟 Add Shader
+            
+            gl_FragColor = vec4(color, 1.0);
+        }
+    </script>
+
+
+    <script>
+        // 全局变量管理
+        let currentAnimationId = null;
+        let activeScene = 1;
+        
+        // 获取 DOM 元素
+        const btn1 = document.getElementById('btn-scene1');
+        const btn2 = document.getElementById('btn-scene2');
+        const canvasWebgl = document.getElementById('canvas-webgl');
+        const canvas2d = document.getElementById('canvas-2d');
+        const infoText = document.getElementById('info-text');
+
+        // 场景描述数据
+        const descriptions = {
+            1: `
+                <p>这是 <strong>Shader (着色器)</strong> 算出来的焦散。</p>
+                <p><strong>原理：</strong>利用数学上的正弦波叠加。当多个波峰重叠时，数值会剧烈升高。</p>
+                <p>在 Blender 中，这类似于你在材质节点里用 <span class="highlight">Math Node (Power)</span> 增强亮度的效果。</p>
+                <p class="tip">观察：光线像网一样交织，这就是游泳池底的典型焦散。</p>
+            `,
+            2: `
+                <p>这是 <strong>Ray Tracing (光线追踪)</strong> 的简化版。</p>
+                <p><strong>原理：</strong>发射数百条光线，利用 <span class="highlight">Add (相加) 模式</span> 渲染。光线越密集的地方，颜色越白、越亮。</p>
+                <p>在 Blender 中，这类似于 Cycles 引擎计算 <span class="highlight">Shadow Caustics</span> 的过程：光子寻找路径并汇聚。</p>
+                <p class="tip">交互：移动鼠标可以改变光源高度。</p>
+            `
+        };
+
+        // ================== 初始化函数 ==================
+        
+        function init() {
+            // 初始化 WebGL
+            initWebGL();
+            // 初始化 2D
+            init2D();
+            
+            // 默认加载场景 1
+            switchScene(1);
+        }
+
+        function switchScene(sceneIndex) {
+            // 1. 停止当前循环
+            if (currentAnimationId) {
+                cancelAnimationFrame(currentAnimationId);
+            }
+
+            // 2. 切换 UI 状态
+            activeScene = sceneIndex;
+            if (sceneIndex === 1) {
+                btn1.classList.add('active');
+                btn2.classList.remove('active');
+                canvasWebgl.classList.remove('hidden');
+                canvas2d.classList.add('hidden');
+                infoText.innerHTML = descriptions[1];
+                renderWebGL(); // 开始 WebGL 循环
+            } else {
+                btn1.classList.remove('active');
+                btn2.classList.add('active');
+                canvasWebgl.classList.add('hidden');
+                canvas2d.classList.remove('hidden');
+                infoText.innerHTML = descriptions[2];
+                render2D(); // 开始 2D 循环
+            }
+        }
+
+        // ================== SCENE 1: WEBGL 实现 ==================
+        let gl, program, uRes, uTime;
+        
+        function initWebGL() {
+            gl = canvasWebgl.getContext("webgl");
+            if (!gl) return;
+
+            // 编译 Shader 的通用函数
+            function createShader(gl, type, source) {
+                const shader = gl.createShader(type);
+                gl.shaderSource(shader, source);
+                gl.compileShader(shader);
+                return shader;
+            }
+
+            const vs = createShader(gl, gl.VERTEX_SHADER, document.getElementById("vertex-shader").text);
+            const fs = createShader(gl, gl.FRAGMENT_SHADER, document.getElementById("fragment-shader").text);
+            
+            program = gl.createProgram();
+            gl.attachShader(program, vs);
+            gl.attachShader(program, fs);
+            gl.linkProgram(program);
+            gl.useProgram(program);
+
+            // 设置全屏矩形
+            const buffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]), gl.STATIC_DRAW);
+            
+            const positionLoc = gl.getAttribLocation(program, "a_position");
+            gl.enableVertexAttribArray(positionLoc);
+            gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+
+            uRes = gl.getUniformLocation(program, "u_resolution");
+            uTime = gl.getUniformLocation(program, "u_time");
+        }
+
+        function renderWebGL(time) {
+            if (activeScene !== 1) return;
+            
+            canvasWebgl.width = window.innerWidth;
+            canvasWebgl.height = window.innerHeight;
+            gl.viewport(0, 0, canvasWebgl.width, canvasWebgl.height);
+            
+            gl.uniform2f(uRes, canvasWebgl.width, canvasWebgl.height);
+            gl.uniform1f(uTime, performance.now() * 0.001);
+            
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            
+            currentAnimationId = requestAnimationFrame(renderWebGL);
+        }
+
+        // ================== SCENE 2: CANVAS 2D 实现 ==================
+        let ctx;
+        let lightY = 100;
+        
+        function init2D() {
+            ctx = canvas2d.getContext('2d');
+            
+            // 监听鼠标
+            window.addEventListener('mousemove', (e) => {
+                if (activeScene === 2) {
+                    lightY = e.clientY;
+                }
+            });
+            // 监听触摸
+            window.addEventListener('touchmove', (e) => {
+                if (activeScene === 2) {
+                    lightY = e.touches[0].clientY;
+                }
+            });
+        }
+
+        function render2D() {
+            if (activeScene !== 2) return;
+
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+            canvas2d.width = w;
+            canvas2d.height = h;
+
+            // 清空画布
+            ctx.fillStyle = '#050505';
+            ctx.fillRect(0, 0, w, h);
+
+            // 绘制玻璃球
+            const sphere = { x: w / 2, y: h / 2, r: Math.min(w, h) * 0.15, ior: 1.5 };
+            
+            ctx.beginPath();
+            ctx.arc(sphere.x, sphere.y, sphere.r, 0, Math.PI * 2);
+            ctx.fillStyle = '#111';
+            ctx.fill();
+            ctx.strokeStyle = '#333';
+            ctx.stroke();
+
+            // 开启【变亮】混合模式 (关键点！)
+            // 这就是模拟“光线叠加变亮”的核心
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.lineWidth = 1;
+
+            const rayCount = 300; // 光线数量
+            const range = sphere.r * 2.2;
+            
+            // 计算光线角度 (跟随鼠标)
+            // 为了简单，我们让光线始终指向球心，只改变入射高度
+            const rays = [];
+
+            for (let i = 0; i < rayCount; i++) {
+                // 模拟一束平行的光源
+                let offset = (i / rayCount) * range - (range / 2);
+                
+                // 光源位置计算
+                let lx = sphere.x - w/3; 
+                let ly = lightY + offset; 
+
+                // 简单的光路计算
+                // 1. 发射光线
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(60, 120, 255, 0.1)'; // 暗淡的蓝光
+                ctx.moveTo(0, ly); // 从左边射入
+                
+                // 检测是否击中球体 (简化版几何计算)
+                // 假设光线水平射入
+                let dy = ly - sphere.y;
+                if (Math.abs(dy) < sphere.r) {
+                    // 击中！计算交点
+                    let dx = Math.sqrt(sphere.r*sphere.r - dy*dy);
+                    let hitX = sphere.x - dx;
+                    let hitY = ly;
+
+                    ctx.lineTo(hitX, hitY);
+                    ctx.stroke();
+
+                    // 2. 计算折射
+                    // 法线角度
+                    let normalAngle = Math.atan2(hitY - sphere.y, hitX - sphere.x);
+                    // 光线水平射入，角度为 0
+                    let incidentAngle = 0 - normalAngle;
+                    // 折射公式
+                    let refractAngle = Math.asin(Math.sin(incidentAngle) / sphere.ior);
+                    let currentAngle = normalAngle + refractAngle;
+
+                    // 绘制穿过球体的内部光线
+                    ctx.beginPath();
+                    ctx.strokeStyle = 'rgba(100, 200, 255, 0.15)';
+                    ctx.moveTo(hitX, hitY);
+                    
+                    // 再次折射（出射）
+                    // 简化模拟：我们直接画出聚焦点
+                    // 真实的物理需要算第二次交点，这里为了演示视觉效果做个近似
+                    let focusDist = sphere.r * 2.5 + Math.abs(dy) * 2; // 焦散特有的像差
+                    let endX = hitX + Math.cos(currentAngle) * 800;
+                    let endY = hitY + Math.sin(currentAngle) * 800;
+
+                    ctx.lineTo(endX, endY);
+                    ctx.stroke();
+                } else {
+                    // 没击中，直接画过去
+                    ctx.lineTo(w, ly);
+                    ctx.stroke();
+                }
+            }
+
+            // 恢复默认混合模式
+            ctx.globalCompositeOperation = 'source-over';
+            
+            currentAnimationId = requestAnimationFrame(render2D);
+        }
+
+        // 启动
+        init();
+
+    </script>
+</body>
+</html>
