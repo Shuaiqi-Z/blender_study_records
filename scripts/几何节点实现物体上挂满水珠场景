@@ -1,0 +1,284 @@
+import bpy
+import math
+import random
+
+def clear_scene():
+    """清除场景"""
+    bpy.ops.object.select_all(action='SELECT')
+    bpy.ops.object.delete(use_global=False)
+
+def create_camera():
+    """创建相机"""
+    bpy.ops.object.camera_add(location=(4, -4, 3))
+    camera = bpy.context.object
+    camera.rotation_euler = (math.radians(70), 0, math.radians(45))
+    bpy.context.scene.camera = camera
+    camera.data.lens = 80
+    camera.data.dof.use_dof = True
+    camera.data.dof.focus_distance = 5.5
+    camera.data.dof.aperture_fstop = 3.2
+    return camera
+
+def create_studio_lighting():
+    """创建工作室灯光"""
+    # 主光
+    bpy.ops.object.light_add(type='AREA', location=(3, -3, 4))
+    key = bpy.context.object
+    key.data.energy = 120
+    key.data.size = 2.5
+    key.rotation_euler = (math.radians(50), 0, math.radians(40))
+    
+    # 补光
+    bpy.ops.object.light_add(type='AREA', location=(-2, -2, 2))
+    fill = bpy.context.object
+    fill.data.energy = 40
+    fill.data.size = 3.0
+    
+    # 轮廓光
+    bpy.ops.object.light_add(type='AREA', location=(0, 3, 2.5))
+    rim = bpy.context.object
+    rim.data.energy = 180
+    rim.data.size = 1.2
+    rim.rotation_euler = (math.radians(110), 0, 0)
+
+def create_glass_material():
+    """创建玻璃材质"""
+    mat_name = "Glass_Bottle"
+    if mat_name in bpy.data.materials:
+        return bpy.data.materials[mat_name]
+    
+    mat = bpy.data.materials.new(name=mat_name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+    
+    output = nodes.new(type='ShaderNodeOutputMaterial')
+    output.location = (600, 0)
+    
+    principled = nodes.new(type='ShaderNodeBsdfPrincipled')
+    principled.location = (300, 0)
+    principled.inputs['Base Color'].default_value = (0.85, 0.9, 0.95, 1.0)
+    principled.inputs['Metallic'].default_value = 0.0
+    principled.inputs['Roughness'].default_value = 0.05
+    principled.inputs['Transmission Weight'].default_value = 0.98
+    principled.inputs['IOR'].default_value = 1.45
+    
+    links.new(principled.outputs['BSDF'], output.inputs['Surface'])
+    return mat
+
+def create_water_droplet_material():
+    """创建水珠材质"""
+    mat_name = "Water_Droplet"
+    if mat_name in bpy.data.materials:
+        return bpy.data.materials[mat_name]
+    
+    mat = bpy.data.materials.new(name=mat_name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    nodes.clear()
+    
+    output = nodes.new(type='ShaderNodeOutputMaterial')
+    output.location = (600, 0)
+    
+    principled = nodes.new(type='ShaderNodeBsdfPrincipled')
+    principled.location = (300, 0)
+    principled.inputs['Base Color'].default_value = (0.95, 0.98, 1.0, 1.0)
+    principled.inputs['Metallic'].default_value = 0.0
+    principled.inputs['Roughness'].default_value = 0.01
+    principled.inputs['Transmission Weight'].default_value = 0.99
+    principled.inputs['IOR'].default_value = 1.33
+    
+    links.new(principled.outputs['BSDF'], output.inputs['Surface'])
+    return mat
+
+def create_bottle():
+    """创建瓶子"""
+    bpy.ops.mesh.primitive_cylinder_add(
+        vertices=48,
+        radius=0.8,
+        depth=2.5,
+        location=(0, 0, 1.25)
+    )
+    bottle = bpy.context.object
+    bottle.name = "Bottle"
+    
+    # 添加倒角修改器
+    bevel = bottle.modifiers.new(name="Bevel", type='BEVEL')
+    bevel.width = 0.015
+    bevel.segments = 4
+    
+    bpy.ops.object.shade_smooth()
+    
+    # 应用材质
+    mat = create_glass_material()
+    if bottle.data.materials:
+        bottle.data.materials[0] = mat
+    else:
+        bottle.data.materials.append(mat)
+    
+    return bottle
+
+def create_water_droplets_geometry_nodes(bottle):
+    """使用几何节点创建水珠"""
+    # 确保瓶子被选中
+    bpy.ops.object.select_all(action='DESELECT')
+    bottle.select_set(True)
+    bpy.context.view_layer.objects.active = bottle
+    
+    # 创建几何节点修改器
+    geo_mod = bottle.modifiers.new(name="Water_Droplets", type='NODES')
+    
+    # 创建新的节点树
+    node_tree = bpy.data.node_groups.new(name="Water_Droplets_GN", type='GeometryNodeTree')
+    geo_mod.node_group = node_tree
+    
+    nodes = node_tree.nodes
+    links = node_tree.links
+    nodes.clear()
+    
+    # 输入输出节点
+    group_input = nodes.new(type='NodeGroupInput')
+    group_input.location = (-1400, 0)
+    
+    group_output = nodes.new(type='NodeGroupOutput')
+    group_output.location = (1400, 0)
+    
+    # 创建输入输出接口
+    node_tree.interface.new_socket(name='Geometry', in_out='INPUT', socket_type='NodeSocketGeometry')
+    node_tree.interface.new_socket(name='Geometry', in_out='OUTPUT', socket_type='NodeSocketGeometry')
+    
+    # 1. 分布点到瓶子表面
+    distribute = nodes.new(type='GeometryNodeDistributePointsOnFaces')
+    distribute.location = (-1100, 0)
+    distribute.distribute_method = 'POISSON'
+    distribute.inputs['Distance Min'].default_value = 0.08
+    distribute.inputs['Density Max'].default_value = 250.0
+    
+    # 2. UV球体作为水珠实例
+    uv_sphere = nodes.new(type='GeometryNodeMeshUVSphere')
+    uv_sphere.location = (-1100, -300)
+    uv_sphere.inputs['Segments'].default_value = 16
+    uv_sphere.inputs['Rings'].default_value = 12
+    
+    # 3. 随机缩放值
+    random_value = nodes.new(type='FunctionNodeRandomValue')
+    random_value.location = (-800, -400)
+    random_value.data_type = 'FLOAT_VECTOR'
+    random_value.inputs['Min'].default_value = (0.015, 0.015, 0.015)
+    random_value.inputs['Max'].default_value = (0.035, 0.035, 0.045)
+    random_value.inputs['Seed'].default_value = 42
+    
+    # 4. 实例到点
+    instance = nodes.new(type='GeometryNodeInstanceOnPoints')
+    instance.location = (-500, 0)
+    
+    # 5. 实现为真实几何体
+    realize = nodes.new(type='GeometryNodeRealizeInstances')
+    realize.location = (-200, 0)
+    
+    # 6. 设置材质
+    set_material = nodes.new(type='GeometryNodeSetMaterial')
+    set_material.location = (100, 0)
+    water_mat = create_water_droplet_material()
+    set_material.inputs['Material'].default_value = water_mat
+    
+    # 7. 细分表面（使水珠更光滑）
+    subdivide = nodes.new(type='GeometryNodeSubdivisionSurface')
+    subdivide.location = (400, 0)
+    subdivide.inputs['Level'].default_value = 1
+    
+    # 8. 设置阴影平滑
+    set_shade = nodes.new(type='GeometryNodeSetShadeSmooth')
+    set_shade.location = (700, 0)
+    set_shade.inputs['Shade Smooth'].default_value = True
+    
+    # 9. 合并几何体
+    join_geo = nodes.new(type='GeometryNodeJoinGeometry')
+    join_geo.location = (1000, 0)
+    
+    # 创建连接
+    links.new(group_input.outputs['Geometry'], distribute.inputs['Mesh'])
+    links.new(group_input.outputs['Geometry'], join_geo.inputs['Geometry'])
+    
+    links.new(distribute.outputs['Points'], instance.inputs['Points'])
+    links.new(uv_sphere.outputs['Mesh'], instance.inputs['Instance'])
+    links.new(random_value.outputs['Value'], instance.inputs['Scale'])
+    
+    links.new(instance.outputs['Instances'], realize.inputs['Geometry'])
+    links.new(realize.outputs['Geometry'], set_material.inputs['Geometry'])
+    links.new(set_material.outputs['Geometry'], subdivide.inputs['Mesh'])
+    links.new(subdivide.outputs['Mesh'], set_shade.inputs['Geometry'])
+    links.new(set_shade.outputs['Geometry'], join_geo.inputs['Geometry'])
+    
+    links.new(join_geo.outputs['Geometry'], group_output.inputs['Geometry'])
+    
+    return geo_mod
+
+def setup_render_settings():
+    """设置渲染参数"""
+    scene = bpy.context.scene
+    scene.render.engine = 'CYCLES'
+    scene.cycles.samples = 512
+    scene.cycles.use_denoising = True
+    scene.cycles.denoiser = 'OPENIMAGEDENOISE'
+    scene.render.resolution_x = 1920
+    scene.render.resolution_y = 1080
+    scene.render.film_transparent = False
+    scene.view_settings.view_transform = 'Filmic'
+    scene.view_settings.look = 'High Contrast'
+    
+    # 设置光线追踪深度
+    scene.cycles.max_bounces = 12
+    scene.cycles.transmission_bounces = 12
+    scene.cycles.transparent_max_bounces = 12
+    
+    # 启用焦散（重要，用于水珠效果）
+    scene.cycles.caustics_reflective = True
+    scene.cycles.caustics_refractive = True
+
+def setup_world():
+    """设置世界环境"""
+    world = bpy.context.scene.world
+    world.use_nodes = True
+    nodes = world.node_tree.nodes
+    links = world.node_tree.links
+    
+    nodes.clear()
+    
+    output = nodes.new(type='ShaderNodeOutputWorld')
+    output.location = (300, 0)
+    
+    background = nodes.new(type='ShaderNodeBackground')
+    background.location = (0, 0)
+    background.inputs['Color'].default_value = (0.9, 0.95, 1.0, 1.0)
+    background.inputs['Strength'].default_value = 0.8
+    
+    links.new(background.outputs['Background'], output.inputs['Surface'])
+
+def main():
+    """主函数"""
+    try:
+        print("开始生成水珠场景...")
+        
+        clear_scene()
+        create_camera()
+        create_studio_lighting()
+        bottle = create_bottle()
+        create_water_droplets_geometry_nodes(bottle)
+        setup_render_settings()
+        setup_world()
+        
+        print("✓ 水珠场景生成成功！")
+        print("提示：几何节点已创建，水珠分布在瓶子表面")
+        print("      可在修改器面板中调整水珠密度和大小参数")
+        
+    except Exception as e:
+        print(f"✗ 错误: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+if __name__ == "__main__":
+    main()
