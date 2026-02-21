@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>三点布光标准三视图 (Top/Front/Side) - Engineering View</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; color: #eee; font-family: monospace; }
+        
+        /* 布局容器 */
+        #container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            width: 100vw; height: 100vh;
+        }
+        .viewport { position: relative; border: 1px solid #333; }
+        
+        /* 视图标签 */
+        .view-label {
+            position: absolute; top: 5px; left: 5px;
+            background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 4px;
+            font-weight: bold; color: #faac58; pointer-events: none;
+        }
+        .view-desc {
+            position: absolute; bottom: 5px; left: 5px;
+            font-size: 11px; color: #aaa; max-width: 80%; pointer-events: none;
+        }
+
+        /* 图例说明 */
+        #legend {
+            position: absolute; top: 10px; right: 10px;
+            background: rgba(0,0,0,0.8); padding: 15px; border: 1px solid #555;
+            z-index: 100; pointer-events: none;
+        }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; font-size: 12px; }
+        .color-box { width: 12px; height: 12px; margin-right: 8px; border-radius: 50%; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="legend">
+    <div style="font-weight:bold; margin-bottom:10px; color:#faac58;">图例说明 (Legend)</div>
+    <div class="legend-item"><div class="color-box" style="background:#ffaa00;"></div>主光 (Key Light) - 45°前侧</div>
+    <div class="legend-item"><div class="color-box" style="background:#0088ff;"></div>补光 (Fill Light) - 对侧弱光</div>
+    <div class="legend-item"><div class="color-box" style="background:#ffffff;"></div>轮廓光 (Rim Light) - 正后方</div>
+    <div style="margin-top:10px; font-size:11px; color:#888;">*白色网格为地面，中心为物体</div>
+</div>
+
+<div id="container">
+    <div class="viewport" id="view-top">
+        <div class="view-label">TOP VIEW (顶视图)</div>
+        <div class="view-desc">俯视平面。观察灯光围绕物体的水平角度分布。</div>
+    </div>
+    <div class="viewport" id="view-persp">
+        <div class="view-label">PERSPECTIVE (最终效果透视)</div>
+        <div class="view-desc">摄像机最终看到的渲染结果。可鼠标拖动旋转。</div>
+    </div>
+    <div class="viewport" id="view-front">
+        <div class="view-label">FRONT VIEW (前视图)</div>
+        <div class="view-desc">正视平面。观察灯光相对于物体的高度差。</div>
+    </div>
+    <div class="viewport" id="view-side">
+        <div class="view-label">RIGHT SIDE VIEW (右视图)</div>
+        <div class="view-desc">侧视平面。观察主光与轮廓光的前后深度关系。</div>
+    </div>
+</div>
+
+<script>
+    // --- 1. 初始化场景与公共元素 ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.top = '0';
+    renderer.domElement.style.zIndex = '-1'; // 放在文字层下面
+
+    // 中心物体 (目标)
+    const geometry = new THREE.SphereGeometry(1, 32, 32);
+    const material = new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.4 });
+    const targetMesh = new THREE.Mesh(geometry, material);
+    targetMesh.castShadow = true;
+    targetMesh.receiveShadow = true;
+    targetMesh.position.y = 1;
+    scene.add(targetMesh);
+
+    // 地面网格辅助
+    const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x222222);
+    scene.add(gridHelper);
+    const axesHelper = new THREE.AxesHelper(2); // 红X 绿Y 蓝Z
+    targetMesh.add(axesHelper); // 将坐标轴绑在物体中心
+
+    // --- 2. 创建三点布光系统及其可视化 ---
+    
+    // 创建可视化灯体和辅助线的函数
+    function createLightVisual(color, name) {
+        const group = new THREE.Group();
+        
+        // 灯体模型 (一个小锥体代表灯)
+        const lampGeo = new THREE.ConeGeometry(0.3, 0.5, 16);
+        lampGeo.rotateX(Math.PI/2);
+        const lampMat = new THREE.MeshBasicMaterial({ color: color, wireframe: true });
+        const lampMesh = new THREE.Mesh(lampGeo, lampMat);
+        group.add(lampMesh);
+
+        // 目标射线 (连接到物体中心的线)
+        const lineMat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.5, dashSize: 0.2, gapSize: 0.1 });
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1) ]);
+        const line = new THREE.Line(lineGeo, lineMat);
+        line.scale.z = 10; // 初始长度，之后会在 update 中动态计算
+        line.name = "targetLine";
+        group.add(line);
+
+        group.name = name + "_Visual";
+        return group;
+    }
+
+    // A. 主光 (Key) - 黄色，右前上方
+    const keyLight = new THREE.SpotLight(0xffaa00, 1.5);
+    keyLight.position.set(4, 4, 4); // 右、上、前
+    keyLight.castShadow = true;
+    scene.add(keyLight);
+    const keyVisual = createLightVisual(0xffaa00, "Key");
+    scene.add(keyVisual);
+
+    // B. 补光 (Fill) - 蓝色，左侧平视
+    const fillLight = new THREE.PointLight(0x0088ff, 0.6);
+    fillLight.position.set(-5, 2, 2); // 左、中、前偏侧
+    scene.add(fillLight);
+    const fillVisual = createLightVisual(0x0088ff, "Fill");
+    scene.add(fillVisual);
+
+    // C. 轮廓光 (Rim) - 白色，正后上方
+    const rimLight = new THREE.SpotLight(0xffffff, 2);
+    rimLight.position.set(0, 5, -5); // 中、高、后
+    scene.add(rimLight);
+    const rimVisual = createLightVisual(0xffffff, "Rim");
+    scene.add(rimVisual);
+
+    // 环境微光
+    scene.add(new THREE.AmbientLight(0x111111));
+
+
+    // --- 3. 创建四个摄像机 ---
+    const frustumSize = 12; // 正交相机的视口大小
+    const aspect = window.innerWidth / window.innerHeight; // 初始比例，后面渲染循环里会重置
+
+    // 透视相机 (右上)
+    const cameraPersp = new THREE.PerspectiveCamera(45, aspect, 0.1, 100);
+    cameraPersp.position.set(8, 6, 10);
+    cameraPersp.lookAt(0, 1, 0);
+    const controls = new THREE.OrbitControls(cameraPersp, renderer.domElement);
+    controls.enablePan = false;
+
+    // 顶视图相机 (左上) - 正交，从Y轴向下看
+    const cameraTop = new THREE.OrthographicCamera(frustumSize * aspect / -2, frustumSize * aspect / 2, frustumSize / 2, frustumSize / -2, 0.1, 100);
+    cameraTop.position.set(0, 20, 0);
+    cameraTop.lookAt(0, 0, 0);
+    cameraTop.up.set(0, 0, -1); // 确保Z轴在视图中是向下的方向
+
+    // 前视图相机 (左下) - 正交，从Z轴向前看
+    const cameraFront = new THREE.OrthographicCamera(frustumSize * aspect / -2, frustumSize * aspect / 2, frustumSize / 2, frustumSize / -2, 0.1, 100);
+    cameraFront.position.set(0, 2, 20);
+    cameraFront.lookAt(0, 2, 0); // 看向物体中心高度
+
+    // 右视图相机 (右下) - 正交，从X轴向左看
+    const cameraSide = new THREE.OrthographicCamera(frustumSize * aspect / -2, frustumSize * aspect / 2, frustumSize / 2, frustumSize / -2, 0.1, 100);
+    cameraSide.position.set(20, 2, 0);
+    cameraSide.lookAt(0, 2, 0);
+
+
+    // --- 4. 渲染循环 (核心：分割视口) ---
+    function updateVisuals() {
+        // 更新灯光可视化物体的位置和朝向
+        [
+            { light: keyLight, visual: keyVisual },
+            { light: fillLight, visual: fillVisual },
+            { light: rimLight, visual: rimVisual }
+        ].forEach(pair => {
+            pair.visual.position.copy(pair.light.position);
+            pair.visual.lookAt(targetMesh.position.x, targetMesh.position.y, targetMesh.position.z);
+            // 更新射线的长度
+            const dist = pair.light.position.distanceTo(targetMesh.position);
+            pair.visual.getObjectByName("targetLine").scale.z = dist;
+        });
+    }
+
+    function render() {
+        requestAnimationFrame(render);
+        controls.update();
+        updateVisuals();
+
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        const halfW = w / 2;
+        const halfH = h / 2;
+
+        renderer.setScissorTest(true); // 开启视口剪裁
+
+        // 1. 左上：顶视图 (Top)
+        renderer.setViewport(0, halfH, halfW, halfH);
+        renderer.setScissor(0, halfH, halfW, halfH);
+        renderer.setClearColor(0x222222); // 深灰色背景区分正交视图
+        renderer.clear();
+        // 更新正交相机比例
+        cameraTop.left = -frustumSize * (halfW/halfH) / 2; cameraTop.right = frustumSize * (halfW/halfH) / 2;
+        cameraTop.top = frustumSize / 2; cameraTop.bottom = -frustumSize / 2; cameraTop.updateProjectionMatrix();
+        renderer.render(scene, cameraTop);
+
+        // 2. 右上：透视图 (Perspective)
+        renderer.setViewport(halfW, halfH, halfW, halfH);
+        renderer.setScissor(halfW, halfH, halfW, halfH);
+        renderer.setClearColor(0x111111); // 纯黑背景
+        renderer.clear();
+        cameraPersp.aspect = halfW / halfH;
+        cameraPersp.updateProjectionMatrix();
+        renderer.render(scene, cameraPersp);
+
+        // 3. 左下：前视图 (Front)
+        renderer.setViewport(0, 0, halfW, halfH);
+        renderer.setScissor(0, 0, halfW, halfH);
+        renderer.setClearColor(0x222222);
+        renderer.clear();
+        cameraFront.left = -frustumSize * (halfW/halfH) / 2; cameraFront.right = frustumSize * (halfW/halfH) / 2;
+        cameraFront.top = frustumSize / 2; cameraFront.bottom = -frustumSize / 2; cameraFront.updateProjectionMatrix();
+        renderer.render(scene, cameraFront);
+
+        // 4. 右下：侧视图 (Side)
+        renderer.setViewport(halfW, 0, halfW, halfH);
+        renderer.setScissor(halfW, 0, halfW, halfH);
+        renderer.setClearColor(0x222222);
+        renderer.clear();
+        cameraSide.left = -frustumSize * (halfW/halfH) / 2; cameraSide.right = frustumSize * (halfW/halfH) / 2;
+        cameraSide.top = frustumSize / 2; cameraSide.bottom = -frustumSize / 2; cameraSide.updateProjectionMatrix();
+        renderer.render(scene, cameraSide);
+
+        renderer.setScissorTest(false);
+    }
+
+    render();
+
+    window.addEventListener('resize', () => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        // 相机比例更新在 render 循环中处理了
+    });
+
+</script>
+</body>
+</html>

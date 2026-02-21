@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>3D 灯光原理交互实验室 - By Gemini</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #111; color: #eee; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+        
+        /* 控制面板样式 */
+        #controls {
+            position: absolute; top: 10px; left: 10px; width: 320px;
+            background: rgba(30, 30, 30, 0.9); padding: 15px; border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); border: 1px solid #444;
+            max-height: 90vh; overflow-y: auto;
+        }
+        h2 { margin-top: 0; font-size: 16px; border-bottom: 1px solid #555; padding-bottom: 5px; color: #faac58; }
+        h3 { font-size: 14px; margin: 10px 0 5px; color: #aaa; }
+        .control-group { margin-bottom: 15px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px; align-items: center; }
+        input[type=range] { width: 60%; }
+        input[type=color] { border: none; width: 30px; height: 20px; padding: 0; background: none; }
+        button {
+            width: 100%; padding: 8px; background: #444; color: white; border: none;
+            border-radius: 4px; cursor: pointer; margin-top: 5px; transition: 0.2s;
+        }
+        button:hover { background: #555; }
+        button.active { background: #faac58; color: #111; font-weight: bold; }
+        
+        /* 原理说明面板 */
+        #info-panel {
+            position: absolute; top: 10px; right: 10px; width: 280px;
+            background: rgba(30, 30, 30, 0.8); padding: 15px; border-radius: 8px;
+            border-left: 3px solid #faac58; pointer-events: none;
+        }
+        .highlight { color: #faac58; font-weight: bold; }
+        .note { font-size: 12px; color: #bbb; line-height: 1.5; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+<div id="controls">
+    <h2>🎛️ 灯光控制台</h2>
+    
+    <div class="control-group">
+        <h3>全局设置</h3>
+        <label><span>物体材质粗糙度</span> <input type="range" id="roughness" min="0" max="1" step="0.01" value="0.2"></label>
+        <label><span>物体金属度</span> <input type="range" id="metalness" min="0" max="1" step="0.01" value="0.8"></label>
+        <button id="anim-toggle">⏯️ 开启/停止 动态扫光动画</button>
+        <div style="font-size:11px; color:#888; margin-top:5px;">*扫光动画模拟产品展示时的灯光移动</div>
+    </div>
+
+    <div class="control-group">
+        <h3>💡 主光 (Key Light) - 塑造形体</h3>
+        <label><span>开关</span> <input type="checkbox" id="key-visible" checked></label>
+        <label><span>强度 (Power)</span> <input type="range" id="key-intensity" min="0" max="2" step="0.1" value="1.2"></label>
+        <label><span>颜色 (Color)</span> <input type="color" id="key-color" value="#ffffff"></label>
+        <label><span>X 位置 (左右)</span> <input type="range" id="key-x" min="-10" max="10" step="0.1" value="5"></label>
+        <label><span>Y 位置 (高低)</span> <input type="range" id="key-y" min="0" max="10" step="0.1" value="5"></label>
+        <label><span>Z 位置 (前后)</span> <input type="range" id="key-z" min="-10" max="10" step="0.1" value="5"></label>
+    </div>
+
+    <div class="control-group">
+        <h3>🔦 补光 (Fill Light) - 填充阴影</h3>
+        <label><span>开关</span> <input type="checkbox" id="fill-visible" checked></label>
+        <label><span>强度 (Power)</span> <input type="range" id="fill-intensity" min="0" max="2" step="0.1" value="0.5"></label>
+        <label><span>颜色 (冷暖对比)</span> <input type="color" id="fill-color" value="#aaccff"></label>
+        <label><span>X 位置</span> <input type="range" id="fill-x" min="-10" max="10" step="0.1" value="-6"></label>
+    </div>
+
+    <div class="control-group">
+        <h3>✨ 轮廓光 (Rim Light) - 边缘剥离</h3>
+        <label><span>开关</span> <input type="checkbox" id="rim-visible" checked></label>
+        <label><span>强度 (Power)</span> <input type="range" id="rim-intensity" min="0" max="5" step="0.1" value="3"></label>
+        <label><span>颜色 (Color)</span> <input type="color" id="rim-color" value="#ffffff"></label>
+        <label><span>Z 位置 (背光距离)</span> <input type="range" id="rim-z" min="-10" max="0" step="0.1" value="-4"></label>
+    </div>
+</div>
+
+<div id="info-panel">
+    <h3>📝 原理笔记</h3>
+    <div id="info-content" class="note">
+        <p><span class="highlight">主光 (Key):</span> 决定物体的明暗交界线。通常放在 45° 角。</p>
+        <p><span class="highlight">补光 (Fill):</span> 照亮主光留下的死黑阴影。注意看左侧暗部，如果不加补光，细节会丢失。</p>
+        <p><span class="highlight">轮廓光 (Rim):</span> 请看物体边缘那层亮边。它把深色物体从深色背景中切出来。这是产品渲染“高级感”的关键。</p>
+        <hr style="border:0; border-top:1px solid #555;">
+        <p>🔴 <b>红色线条</b> 代表灯光照射方向。</p>
+        <p>🟡 <b>黄色网格</b> 代表灯光物理位置。</p>
+    </div>
+</div>
+
+<div id="canvas-container"></div>
+
+<script>
+    // 1. 初始化场景 (Scene Setup)
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111); // Blender 的深灰背景
+    scene.fog = new THREE.Fog(0x111111, 10, 50); // 增加一点深度雾
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 2, 12); // 相机位置
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true; // 开启阴影
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap; // 柔和阴影
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // 模拟 Blender Filmic 效果
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    // 2. 创建物体 (The "Product")
+    // 使用 TorusKnot (扭结) 因为它有复杂的曲面，最能体现光影
+    const geometry = new THREE.TorusKnotGeometry(1.5, 0.5, 128, 32);
+    const material = new THREE.MeshStandardMaterial({ 
+        color: 0x333333, 
+        roughness: 0.2, // 对应 Blender 的 Roughness
+        metalness: 0.8  // 对应 Blender 的 Metallic
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.position.y = 1;
+    scene.add(mesh);
+
+    // 地面 (接收阴影)
+    const planeGeometry = new THREE.PlaneGeometry(100, 100);
+    const planeMaterial = new THREE.MeshStandardMaterial({ color: 0x080808, roughness: 0.8 });
+    const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.y = -1.5;
+    plane.receiveShadow = true;
+    scene.add(plane);
+
+    // 3. 灯光系统 (Lighting System)
+
+    // A. 主光 (Key Light) - SpotLight 模拟影棚聚光灯
+    const keyLight = new THREE.SpotLight(0xffffff, 1.2);
+    keyLight.position.set(5, 5, 5);
+    keyLight.angle = Math.PI / 6;
+    keyLight.penumbra = 0.5; // 边缘柔化
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.width = 1024;
+    keyLight.shadow.mapSize.height = 1024;
+    scene.add(keyLight);
+    // 辅助线
+    const keyHelper = new THREE.SpotLightHelper(keyLight);
+    scene.add(keyHelper);
+
+    // B. 补光 (Fill Light) - PointLight 模拟柔光箱 (无阴影，只补亮度)
+    const fillLight = new THREE.PointLight(0xaaccff, 0.5);
+    fillLight.position.set(-6, 2, 6);
+    scene.add(fillLight);
+    const fillHelper = new THREE.PointLightHelper(fillLight, 0.5);
+    scene.add(fillHelper);
+
+    // C. 轮廓光 (Rim Light) - SpotLight 背光
+    const rimLight = new THREE.SpotLight(0xffffff, 3);
+    rimLight.position.set(0, 4, -4);
+    rimLight.lookAt(mesh.position);
+    rimLight.castShadow = false; // 轮廓光通常不产生主阴影
+    scene.add(rimLight);
+    const rimHelper = new THREE.SpotLightHelper(rimLight); 
+    scene.add(rimHelper);
+
+
+    // 4. 交互逻辑 (Interaction)
+    
+    // 更新函数
+    function updateLights() {
+        // 材质更新
+        material.roughness = parseFloat(document.getElementById('roughness').value);
+        material.metalness = parseFloat(document.getElementById('metalness').value);
+
+        // 主光更新
+        keyLight.visible = document.getElementById('key-visible').checked;
+        keyLight.intensity = parseFloat(document.getElementById('key-intensity').value);
+        keyLight.color.set(document.getElementById('key-color').value);
+        keyLight.position.set(
+            parseFloat(document.getElementById('key-x').value),
+            parseFloat(document.getElementById('key-y').value),
+            parseFloat(document.getElementById('key-z').value)
+        );
+        keyHelper.update();
+        keyHelper.visible = keyLight.visible;
+
+        // 补光更新
+        fillLight.visible = document.getElementById('fill-visible').checked;
+        fillLight.intensity = parseFloat(document.getElementById('fill-intensity').value);
+        fillLight.color.set(document.getElementById('fill-color').value);
+        fillLight.position.x = parseFloat(document.getElementById('fill-x').value);
+        fillHelper.update();
+        fillHelper.visible = fillLight.visible;
+
+        // 轮廓光更新
+        rimLight.visible = document.getElementById('rim-visible').checked;
+        rimLight.intensity = parseFloat(document.getElementById('rim-intensity').value);
+        rimLight.color.set(document.getElementById('rim-color').value);
+        rimLight.position.z = parseFloat(document.getElementById('rim-z').value);
+        rimLight.lookAt(mesh.position); // 始终对准物体
+        rimHelper.update();
+        rimHelper.visible = rimLight.visible;
+    }
+
+    // 事件监听
+    document.querySelectorAll('input').forEach(input => {
+        input.addEventListener('input', updateLights);
+    });
+
+    // 动画循环
+    let isAnimating = false;
+    let time = 0;
+    document.getElementById('anim-toggle').addEventListener('click', () => {
+        isAnimating = !isAnimating;
+        document.getElementById('anim-toggle').classList.toggle('active');
+    });
+
+    // 鼠标旋转 (简单的模拟)
+    let mouseX = 0, mouseY = 0;
+    document.addEventListener('mousemove', (event) => {
+        mouseX = (event.clientX - window.innerWidth / 2) / 100;
+        mouseY = (event.clientY - window.innerHeight / 2) / 100;
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // 简单的相机交互
+        camera.position.x += (mouseX - camera.position.x) * 0.05;
+        camera.position.y += (-mouseY + 2 - camera.position.y) * 0.05;
+        camera.lookAt(scene.position);
+
+        // 扫光动画逻辑
+        if (isAnimating) {
+            time += 0.02;
+            // 让主光左右摇摆
+            keyLight.position.x = Math.sin(time) * 8;
+            document.getElementById('key-x').value = keyLight.position.x; // 同步UI
+            keyHelper.update();
+        }
+
+        // 慢慢旋转物体展示高光
+        mesh.rotation.y += 0.005;
+        mesh.rotation.x += 0.002;
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // 窗口大小调整
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+</script>
+</body>
+</html>
