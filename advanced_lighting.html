@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Blender 高级布光实验室 - 工业/Gobo/色温</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; color: #ccc; font-family: 'Segoe UI', sans-serif; }
+        
+        /* 左侧控制面板 */
+        #controls {
+            position: absolute; top: 10px; left: 10px; width: 340px;
+            background: rgba(20, 20, 25, 0.95); padding: 20px; border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8); border: 1px solid #333;
+            max-height: 95vh; overflow-y: auto; z-index: 10;
+        }
+        h2 { margin-top: 0; font-size: 18px; color: #faac58; border-bottom: 2px solid #faac58; padding-bottom: 10px; letter-spacing: 1px; }
+        h3 { font-size: 14px; margin: 15px 0 8px; color: #fff; border-left: 3px solid #0088ff; padding-left: 8px; }
+        .control-group { margin-bottom: 20px; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 6px; }
+        label { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 8px; align-items: center; color: #aaa; }
+        input[type=range] { width: 55%; accent-color: #faac58; }
+        select { width: 60%; background: #333; color: white; border: 1px solid #555; padding: 4px; border-radius: 4px; }
+        
+        /* 顶部说明条 */
+        #status-bar {
+            position: absolute; top: 0; left: 370px; right: 0; height: 40px;
+            background: rgba(0,0,0,0.8); display: flex; align-items: center; padding-left: 20px;
+            font-size: 13px; color: #0088ff; border-bottom: 1px solid #333; pointer-events: none;
+        }
+
+        /* 标签 */
+        .tag { background: #444; padding: 2px 6px; border-radius: 4px; font-size: 10px; color: white; margin-left: 5px; }
+        .tag-phy { background: #882222; } /* 物理 */
+        .tag-art { background: #225522; } /* 艺术 */
+
+    </style>
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/lights/RectAreaLightUniformsLib.js"></script>
+</head>
+<body>
+
+<div id="status-bar">
+    当前演示核心：<span id="current-focus" style="color:white; margin-left:10px; font-weight:bold;">初始化中...</span>
+</div>
+
+<div id="controls">
+    <h2>🧪 高级光影实验室</h2>
+    <p style="font-size:12px; color:#777;">模拟 Blender Cycles 的高级灯光行为</p>
+
+    <div class="control-group">
+        <h3>1. 面积灯 (Area Light) <span class="tag tag-phy">物理</span></h3>
+        <p style="font-size:11px; color:#888; margin-bottom:10px;">控制高光形状与柔和度。拉宽它变成“长条灯”。</p>
+        
+        <label><span>宽度 (Width/Strip)</span> <input type="range" id="area-width" min="1" max="20" step="0.1" value="2"></label>
+        <label><span>高度 (Height)</span> <input type="range" id="area-height" min="1" max="20" step="0.1" value="10"></label>
+        <label><span>强度 (Intensity)</span> <input type="range" id="area-intensity" min="0" max="10" step="0.1" value="5"></label>
+        
+        <div style="margin-top:10px; border-top:1px dashed #444; padding-top:10px;">
+            <label><span>🛑 开启“扫光”动画</span> <input type="checkbox" id="anim-sweep"></label>
+            <div style="font-size:10px; color:#faac58;">模拟产品广告中的 Strip Sweep 效果</div>
+        </div>
+    </div>
+
+    <div class="control-group">
+        <h3>2. Gobo 投影 (Spot + Texture) <span class="tag tag-art">艺术</span></h3>
+        <p style="font-size:11px; color:#888; margin-bottom:10px;">在灯前加遮挡物，打破平淡背景。</p>
+        
+        <label><span>Gobo 图案</span> 
+            <select id="gobo-select">
+                <option value="none">无 (纯净光)</option>
+                <option value="blinds" selected>百叶窗 (Blinds)</option>
+                <option value="grid">科技栅格 (Grid)</option>
+                <option value="noise">树影噪波 (Noise)</option>
+            </select>
+        </label>
+        <label><span>虚化 (Blur/Radius)</span> <input type="range" id="gobo-blur" min="0" max="1" step="0.01" value="0.1"></label>
+        <label><span>位置旋转 (Rotate)</span> <input type="range" id="gobo-rot" min="0" max="6.28" step="0.1" value="0.5"></label>
+    </div>
+
+    <div class="control-group">
+        <h3>3. 物理色温 (Kelvin) <span class="tag tag-phy">物理</span></h3>
+        <p style="font-size:11px; color:#888; margin-bottom:10px;">基于黑体辐射的真实颜色计算。</p>
+        
+        <label><span>色温 (K)</span> <input type="range" id="temp-slider" min="2000" max="12000" step="100" value="6500"></label>
+        <div id="temp-display" style="text-align:center; font-size:12px; font-weight:bold; color:white; margin-top:5px;">6500K - 标准白光</div>
+    </div>
+
+    <div class="control-group">
+        <h3>物体材质</h3>
+        <label><span>粗糙度 (Roughness)</span> <input type="range" id="mat-rough" min="0" max="1" step="0.01" value="0.15"></label>
+        <label><span>金属度 (Metalness)</span> <input type="range" id="mat-metal" min="0" max="1" step="0.01" value="0.9"></label>
+    </div>
+</div>
+
+<div id="canvas-container"></div>
+
+<script>
+    // --- 0. 工具函数：色温转 RGB (Kelvin to RGB approximate) ---
+    function kelvinToRGB(kelvin) {
+        let temp = kelvin / 100;
+        let r, g, b;
+        if (temp <= 66) {
+            r = 255;
+            g = temp;
+            g = 99.4708025861 * Math.log(g) - 161.1195681661;
+            if (temp <= 19) b = 0;
+            else {
+                b = temp - 10;
+                b = 138.5177312231 * Math.log(b) - 305.0447927307;
+            }
+        } else {
+            r = temp - 60;
+            r = 329.698727446 * Math.pow(r, -0.1332047592);
+            g = temp - 60;
+            g = 288.1221695283 * Math.pow(g, -0.0755148492);
+            b = 255;
+        }
+        return {
+            r: Math.max(0, Math.min(255, r)) / 255,
+            g: Math.max(0, Math.min(255, g)) / 255,
+            b: Math.max(0, Math.min(255, b)) / 255
+        };
+    }
+
+    // --- 1. 场景初始化 ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050505);
+
+    const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 3, 10);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping; // 电影级色调映射
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+    // 轨道控制 (模拟)
+    let mouseX = 0, mouseY = 0;
+    document.addEventListener('mousemove', (e) => {
+        mouseX = (e.clientX - window.innerWidth/2) / 200;
+        mouseY = (e.clientY - window.innerHeight/2) / 200;
+    });
+
+    // --- 2. 物体创建 (高反射主体) ---
+    // 创建一个复杂的组合体来展示高光流动
+    const mainGeo = new THREE.TorusKnotGeometry(1, 0.35, 120, 32);
+    const mainMat = new THREE.MeshStandardMaterial({ 
+        color: 0x222222, 
+        roughness: 0.15, 
+        metalness: 0.9 
+    });
+    const mainObj = new THREE.Mesh(mainGeo, mainMat);
+    mainObj.castShadow = true;
+    mainObj.receiveShadow = true;
+    mainObj.position.y = 1.2;
+    scene.add(mainObj);
+
+    // 地面与背景 (无限背景墙 Cyclorama)
+    const floorGeo = new THREE.PlaneGeometry(50, 50);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5, metalness: 0.2 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // --- 3. 高级灯光系统 ---
+
+    // A. 柔光箱/长条灯 (RectAreaLight) - 负责高光形状
+    // 注意：Three.js 中 RectAreaLight 需要辅助库才能正确渲染反射
+    const areaLight = new THREE.RectAreaLight(0xffffff, 5, 2, 10);
+    areaLight.position.set(-5, 4, 5);
+    areaLight.lookAt(0, 1, 0);
+    scene.add(areaLight);
+    
+    // 视觉辅助线 (模拟 Blender 视口中的黄框)
+    // const rectLightHelper = new THREE.RectAreaLightHelper( areaLight ); // 需要额外引入 helper 库，这里为了简化省略，直接看效果
+
+    // B. Gobo 投影灯 (SpotLight + CanvasTexture) - 负责阴影细节
+    // 动态生成 Gobo 贴图
+    function createGoboTexture(type) {
+        const size = 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext('2d');
+        
+        ctx.fillStyle = '#000000'; // 黑色遮挡
+        ctx.fillRect(0, 0, size, size);
+        ctx.fillStyle = '#ffffff'; // 白色透光
+
+        if (type === 'blinds') { // 百叶窗
+            for (let i = 0; i < 10; i++) {
+                ctx.fillRect(0, i * 50 + 10, size, 30);
+            }
+        } else if (type === 'grid') { // 栅格
+            for (let i = 0; i < 10; i++) {
+                ctx.fillRect(i * 50, 0, 2, size);
+                ctx.fillRect(0, i * 50, size, 2);
+            }
+        } else if (type === 'noise') { // 随机噪波
+            for (let i = 0; i < 200; i++) {
+                const x = Math.random() * size;
+                const y = Math.random() * size;
+                const r = Math.random() * 30 + 10;
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        } else { // None
+             ctx.fillRect(0, 0, size, size);
+        }
+
+        const texture = new THREE.CanvasTexture(canvas);
+        return texture;
+    }
+
+    const goboLight = new THREE.SpotLight(0xffaa88, 2);
+    goboLight.position.set(8, 6, 2);
+    goboLight.angle = 0.5;
+    goboLight.penumbra = 0.1; // 边缘柔化
+    goboLight.castShadow = true;
+    goboLight.shadow.mapSize.width = 1024;
+    goboLight.shadow.mapSize.height = 1024;
+    goboLight.map = createGoboTexture('blinds'); // 初始加载百叶窗
+    scene.add(goboLight);
+
+    // 环境光 (微弱)
+    const ambLight = new THREE.AmbientLight(0x222222);
+    scene.add(ambLight);
+
+
+    // --- 4. 交互逻辑 ---
+    
+    const statusBar = document.getElementById('current-focus');
+
+    // 面积灯控制
+    document.getElementById('area-width').addEventListener('input', (e) => {
+        areaLight.width = parseFloat(e.target.value);
+        statusBar.innerText = `面积灯形状: 宽 ${areaLight.width.toFixed(1)} x 高 ${areaLight.height.toFixed(1)} (模拟长条灯反射)`;
+    });
+    document.getElementById('area-height').addEventListener('input', (e) => {
+        areaLight.height = parseFloat(e.target.value);
+        statusBar.innerText = `面积灯形状: 宽 ${areaLight.width.toFixed(1)} x 高 ${areaLight.height.toFixed(1)}`;
+    });
+    document.getElementById('area-intensity').addEventListener('input', (e) => {
+        areaLight.intensity = parseFloat(e.target.value);
+    });
+
+    // Gobo 控制
+    document.getElementById('gobo-select').addEventListener('change', (e) => {
+        goboLight.map = createGoboTexture(e.target.value);
+        statusBar.innerText = `投影贴图切换为: ${e.target.value}`;
+    });
+    document.getElementById('gobo-blur').addEventListener('input', (e) => {
+        goboLight.shadow.radius = parseFloat(e.target.value) * 10; // 模拟软阴影
+        statusBar.innerText = `Gobo 虚化程度 (模拟灯光尺寸)`;
+    });
+    document.getElementById('gobo-rot').addEventListener('input', (e) => {
+        // 旋转 SpotLight 比较麻烦，这里简单移动位置来模拟投影变化
+        const val = parseFloat(e.target.value);
+        goboLight.position.x = Math.cos(val) * 8;
+        goboLight.position.z = Math.sin(val) * 8;
+        goboLight.lookAt(0,0,0);
+        statusBar.innerText = `调整投影灯角度`;
+    });
+
+    // 色温控制
+    document.getElementById('temp-slider').addEventListener('input', (e) => {
+        const k = parseInt(e.target.value);
+        const rgb = kelvinToRGB(k);
+        const color = new THREE.Color(rgb.r, rgb.g, rgb.b);
+        
+        // 应用到 goboLight (作为主光源展示色温)
+        goboLight.color = color;
+        
+        let desc = "标准白";
+        if (k < 3000) desc = "烛光/日落 (暖)";
+        else if (k < 5000) desc = "暖白/清晨";
+        else if (k > 8000) desc = "蓝天/阴影 (冷)";
+        
+        document.getElementById('temp-display').innerText = `${k}K - ${desc}`;
+        document.getElementById('temp-display').style.color = `rgb(${rgb.r*255},${rgb.g*255},${rgb.b*255})`;
+        statusBar.innerText = `物理色温: ${k}K (模拟黑体辐射)`;
+    });
+
+    // 材质控制
+    document.getElementById('mat-rough').addEventListener('input', (e) => {
+        mainMat.roughness = parseFloat(e.target.value);
+    });
+    document.getElementById('mat-metal').addEventListener('input', (e) => {
+        mainMat.metalness = parseFloat(e.target.value);
+    });
+
+    // 动画循环
+    let time = 0;
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // 相机跟随鼠标微动
+        camera.position.x += (mouseX * 5 - camera.position.x) * 0.05;
+        camera.position.y += (-mouseY * 5 + 3 - camera.position.y) * 0.05;
+        camera.lookAt(0, 1, 0);
+
+        // 扫光动画 (Strip Sweep)
+        if (document.getElementById('anim-sweep').checked) {
+            time += 0.03;
+            // 让面积灯在物体前方左右平移
+            areaLight.position.x = Math.sin(time) * 6;
+            areaLight.lookAt(0, 1, 0);
+            statusBar.innerText = "正在演示：动态扫光 (Strip Sweep) - 注意看物体表面的高光流动";
+        }
+
+        // 物体自转展示反射
+        mainObj.rotation.y += 0.002;
+
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
